@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "KneeSense_Node",
+			"path": "1_Firmware/KneeSense_Node"
+		}
+	],
+	"settings": {
+		"liveServer.settings.multiRootWorkspaceName": "KNEESENSE_Project"
+	}
+}

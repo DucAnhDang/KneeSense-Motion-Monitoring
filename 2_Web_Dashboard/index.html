@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KNEESENSE - AI Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #f2f2f7; --card-bg: #ffffff; --text-main: #1c1c1e;
+            --accent-purple: #af52de; --accent-orange: #ff9500; --accent-blue: #007aff;
+            --accent-red: #ff3b30; --accent-green: #34c759;
+        }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg-color); margin: 0; padding: 20px; color: var(--text-main); }
+        .dashboard { max-width: 1200px; margin: 0 auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+        .header h1 { margin: 0; font-size: 28px; font-weight: bold;}
+        
+        #connectBtn { 
+            background-color: var(--accent-blue); color: white; border: none; padding: 12px 24px; 
+            font-size: 16px; border-radius: 30px; font-weight: bold; cursor: pointer; 
+            transition: 0.2s; box-shadow: 0 4px 12px rgba(0,122,255,0.3);
+        }
+        #connectBtn.connected { background-color: var(--accent-green); }
+
+        .kpi-grid { display: grid; grid-template-columns: 1fr 1.5fr 1.5fr 1fr; gap: 16px; margin-bottom: 24px; }
+        .card { background: var(--card-bg); padding: 16px; border-radius: 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.04); text-align: center; transition: 0.3s; }
+        .card h3 { margin: 0 0 6px 0; font-size: 13px; color: #8e8e93; text-transform: uppercase; }
+        .card .value { font-size: 26px; font-weight: 700; }
+        
+        /* Hiệu ứng nhấp nháy nhẹ khi có tư thế mới */
+        .pose-card { background: var(--accent-purple); color: white; border: 2px solid transparent; }
+        .pose-active { border-color: white; transform: scale(1.02); }
+
+        .chart-container { background: var(--card-bg); padding: 20px; border-radius: 20px; margin-bottom: 24px; height: 200px; box-shadow: 0 8px 24px rgba(0,0,0,0.04);}
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <div class="header">
+            <h1>🩺 KNEESENSE Dashboard</h1>
+            <button id="connectBtn">Connect Bluetooth</button>
+        </div>
+
+        <div class="kpi-grid">
+            <div class="card"><h3>Flex Angle (Degree)</h3><div class="value" id="txt-flex" style="color:var(--accent-purple)">--°</div></div>
+            <div class="card"><h3>Force Sensor (N)</h3><div class="value" id="txt-force-total" style="color:var(--accent-orange)">-- N</div><div id="txt-force-detail" style="font-size:12px">T: -- | N: -- | Tr: --</div></div>
+            <div class="card"><h3>IMU (Degree)</h3><div class="value" id="txt-imu" style="color:var(--accent-blue)">-- / --</div></div>
+            
+            <div class="card pose-card" id="card-pose">
+                <h3>Current Pose</h3>
+                <div class="value" id="ai-status" style="font-size: 22px;">Waiting...</div>
+            </div>
+        </div>
+
+        <div class="chart-container"><canvas id="flexChart"></canvas></div>
+        <div class="chart-container"><canvas id="forceChart"></canvas></div>
+        <div class="chart-container"><canvas id="imuChart"></canvas></div>
+    </div>
+
+    <script>
+        const chartCommonOptions = { responsive: true, maintainAspectRatio: false, animation: false, elements:{ point:{radius:0}}, scales: { x: { display: false } } };
+        
+        // Khởi tạo các biểu đồ
+        const flexChart = new Chart(document.getElementById('flexChart'), { type: 'line', data: { labels: [], datasets: [{ label: 'Flex Angle (°)', borderColor: '#af52de', data: [], fill: true }] }, options: chartCommonOptions });
+        const forceChart = new Chart(document.getElementById('forceChart'), { type: 'line', data: { labels: [], datasets: [{ label: 'T', borderColor: '#ff9500', data: [] }, { label: 'N', borderColor: '#ff3b30', data: [] }, { label: 'Tr', borderColor: '#34c759', data: [] } ]}, options: chartCommonOptions });
+        const imuChart = new Chart(document.getElementById('imuChart'), { type: 'line', data: { labels: [], datasets: [{ label: 'Pitch', borderColor: '#007aff', data: [] }, { label: 'Roll', borderColor: '#5ac8fa', data: [] } ]}, options: chartCommonOptions });
+
+        let dataCount = 0;
+        let aiUpdateCounter = 0;
+
+        // --- HÀM CHUYỂN ĐỔI ADC SANG GÓC (MAX 120) ---
+        function mapFlexToDegree(adc) {
+            // LƯU Ý: Bạn có thể cần tinh chỉnh ADC_MIN và ADC_MAX theo thực tế phần cứng của bạn
+            const ADC_MIN = 0;    // Giá trị ADC khi chân duỗi thẳng (0 độ)
+            const ADC_MAX = 4095; // Giá trị ADC khi chân gập hết cỡ (120 độ)
+            
+            let degree = ((adc - ADC_MIN) / (ADC_MAX - ADC_MIN)) * 120.0;
+            
+            // Giới hạn an toàn trong khoảng 0 - 120 độ
+            if (degree > 120) degree = 120;
+            if (degree < 0) degree = 0;
+            
+            return degree;
+        }
+
+        function updateUI(data) {
+            let totalForce = data.fsr1 + data.fsr2 + data.fsr3;
+            
+            // 1. Cập nhật Text (Hiển thị góc độ)
+            document.getElementById('txt-flex').innerText = data.flexDegree.toFixed(1) + "°";
+            document.getElementById('txt-force-total').innerText = totalForce.toFixed(1) + " N";
+            document.getElementById('txt-force-detail').innerText = `T:${data.fsr1.toFixed(1)} | N:${data.fsr2.toFixed(1)} | Tr:${data.fsr3.toFixed(1)}`;
+            document.getElementById('txt-imu').innerText = `${data.pitch.toFixed(0)}° / ${data.roll.toFixed(0)}°`;
+            
+            // 2. GỌI AI SERVER
+            aiUpdateCounter++;
+            if (aiUpdateCounter % 10 === 0) {
+                predictPoseWithAI(data);
+            }
+            
+            // 3. Cập nhật Biểu đồ
+            dataCount++;
+            updateCharts(data);
+        }
+
+        async function predictPoseWithAI(data) {
+            const poseEl = document.getElementById('ai-status');
+            const cardEl = document.getElementById('card-pose');
+            
+            try {
+                const response = await fetch('http://127.0.0.1:5000/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        // Vẫn gửi giá trị ADC thô (flexAdc) vào AI để không làm sai lệch model đã train
+                        data: [data.flexAdc, data.fsr1, data.fsr2, data.fsr3, data.pitch, data.roll] 
+                    })
+                });
+
+                const result = await response.json();
+                
+                if (result.prediction) {
+                    const pose = result.prediction;
+                    let icon = "⚙️";
+                    let color = "var(--accent-purple)";
+
+                    if (pose === "Sitting") { icon = "🪑"; color = "var(--accent-blue)"; }
+                    else if (pose === "Standing") { icon = "🧍‍♂️"; color = "var(--accent-green)"; }
+                    else if (pose === "Walking") { icon = "🚶‍♂️"; color = "var(--accent-orange)"; }
+
+                    poseEl.innerText = `${icon} ${pose}`;
+                    cardEl.style.background = color;
+                    
+                    cardEl.classList.add('pose-active');
+                    setTimeout(() => cardEl.classList.remove('pose-active'), 100);
+                }
+            } catch (err) {
+                poseEl.innerText = "AI Offline";
+                cardEl.style.background = "#8e8e93";
+            }
+        }
+
+        function updateCharts(data) {
+            [flexChart, forceChart, imuChart].forEach(c => c.data.labels.push(dataCount));
+            // Biểu đồ hiển thị góc (độ)
+            flexChart.data.datasets[0].data.push(data.flexDegree);
+            forceChart.data.datasets[0].data.push(data.fsr1);
+            forceChart.data.datasets[1].data.push(data.fsr2);
+            forceChart.data.datasets[2].data.push(data.fsr3);
+            imuChart.data.datasets[0].data.push(data.pitch);
+            imuChart.data.datasets[1].data.push(data.roll);
+
+            if (dataCount > 50) {
+                [flexChart, forceChart, imuChart].forEach(c => {
+                    c.data.labels.shift();
+                    c.data.datasets.forEach(d => d.data.shift());
+                });
+            }
+            [flexChart, forceChart, imuChart].forEach(c => c.update('none'));
+        }
+
+        // Web Bluetooth Logic
+        const connectBtn = document.getElementById('connectBtn');
+        let buffer = "";
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'KNEESENSE_prototype' }],
+                    optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e']
+                });
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
+                const char = await service.getCharacteristic('6e400003-b5a3-f393-e0a9-e50e24dcca9e');
+                
+                await char.startNotifications();
+                connectBtn.innerText = "Connected";
+                connectBtn.classList.add('connected');
+
+                char.addEventListener('characteristicvaluechanged', (e) => {
+                    buffer += new TextDecoder().decode(e.target.value);
+                    let lines = buffer.split('\n');
+                    buffer = lines.pop();
+                    
+                    lines.forEach(line => {
+                        let v = line.split(',');
+                        if (v.length === 6) {
+                            let rawFlex = parseInt(v[0]);
+                            updateUI({
+                                flexAdc: rawFlex, // Gửi nguyên bản cho AI Model
+                                flexDegree: mapFlexToDegree(rawFlex), // Dùng cho hiển thị UI & Chart
+                                fsr1: parseFloat(v[1]),
+                                fsr2: parseFloat(v[2]), 
+                                fsr3: parseFloat(v[3]),
+                                pitch: parseFloat(v[4]), 
+                                roll: parseFloat(v[5])
+                            });
+                        }
+                    });
+                });
+            } catch (err) { console.error(err); alert("Kết nối thất bại!"); }
+        });
+    </script>
+</body>
+</html>
