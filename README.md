@@ -1,4 +1,4 @@
-# KNEESENSE: Real-Time Knee Joint Motion Monitoring System
+# KneeTrack(formerly KNEESENSE): Real-Time Knee Joint Motion Monitoring System
 
 ## 1. Introduction
 This project aims to recognize human motion states (Sitting, Standing, Walking) in real-time using a wearable device attached to the knee.
